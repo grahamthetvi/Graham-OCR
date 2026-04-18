@@ -1,0 +1,168 @@
+# Assemble distributable packages using the official Windows / Linux runtime
+# bundles and plugin releases (same flow as upstream docs).
+#
+# Maintainer knobs: align these tags with assets that exist on GitHub when
+# bumping toolchains. App version for filenames comes from UmiOCR-data/about.json.
+#
+# See: https://github.com/hiroi-sora/Umi-OCR_runtime_windows
+#      https://github.com/hiroi-sora/Umi-OCR_runtime_linux
+#
+# macOS: no first-party packaging script in-tree yet; add a job here when one exists.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Create/update GitHub Release for this tag (only when run on a version tag ref)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Umi-OCR_runtime_windows — auxiliary zip (runtime + site-packages + 7zr, …)
+  WIN_RUNTIME_BUNDLE_TAG: "2.1.5"
+  # Umi-OCR_runtime_linux — embeddable Python tarball (tag must match release)
+  LINUX_EMBEDDABLE_TAG: "2.1.3"
+  # Umi-OCR_plugins — Paddle / Rapid / Linux Paddle archives
+  PLUGINS_RELEASE_TAG: "2.0.0"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assemble Windows tree and run release.py
+        shell: bash
+        env:
+          WIN_RUNTIME_BUNDLE_TAG: ${{ env.WIN_RUNTIME_BUNDLE_TAG }}
+          PLUGINS_RELEASE_TAG: ${{ env.PLUGINS_RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/hiroi-sora/Umi-OCR_runtime_windows.git _runtime_win
+          mkdir -p _tmp
+          curl -fL -o _tmp/Umi-OCR_runtime_win7_x64.zip \
+            "https://github.com/hiroi-sora/Umi-OCR_runtime_windows/releases/download/${WIN_RUNTIME_BUNDLE_TAG}/Umi-OCR_runtime_win7_x64.zip"
+          unzip -q _tmp/Umi-OCR_runtime_win7_x64.zip -d _tmp/
+          cp -rn _tmp/Umi-OCR_runtime_win7_x64/. _runtime_win/
+          cp -rn _runtime_win/. .
+
+          curl -fL -o _tmp/win7_x64_PaddleOCR-json_v141.7z \
+            "https://github.com/hiroi-sora/Umi-OCR_plugins/releases/download/${PLUGINS_RELEASE_TAG}/win7_x64_PaddleOCR-json_v141.7z"
+          curl -fL -o _tmp/win7_x64_RapidOCR-json.7z \
+            "https://github.com/hiroi-sora/Umi-OCR_plugins/releases/download/${PLUGINS_RELEASE_TAG}/win7_x64_RapidOCR-json.7z"
+          mkdir -p _tmp/paddle _tmp/rapid
+          ./dev-tools/7z/7zr x _tmp/win7_x64_PaddleOCR-json_v141.7z -o_tmp/paddle
+          ./dev-tools/7z/7zr x _tmp/win7_x64_RapidOCR-json.7z -o_tmp/rapid
+          mkdir -p UmiOCR-data/plugins
+          cp -rn _tmp/paddle/. UmiOCR-data/plugins/
+          cp -rn _tmp/rapid/. UmiOCR-data/plugins/
+
+          test -f UmiOCR-data/runtime/python.exe
+          shopt -s nullglob
+          paddle=(UmiOCR-data/plugins/win7_x64_PaddleOCR-json*)
+          rapid=(UmiOCR-data/plugins/win7_x64_RapidOCR-json*)
+          if [ ${#paddle[@]} -lt 1 ] || [ ${#rapid[@]} -lt 1 ]; then
+            echo "::error::Expected Paddle + Rapid plugin folders under UmiOCR-data/plugins"
+            ls -la UmiOCR-data/plugins || true
+            exit 1
+          fi
+          PADDLE_DIR=$(basename "${paddle[0]}")
+          RAPID_DIR=$(basename "${rapid[0]}")
+          UmiOCR-data/runtime/python.exe release.py --path release --to_7z --to_sfx \
+            --plugins "Paddle,${PADDLE_DIR}|Rapid,${RAPID_DIR}"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: |
+            release/*.7z
+            release/*.exe
+          if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y jq xz-utils rsync
+
+      - name: Assemble Linux bundle and tarball
+        env:
+          LINUX_EMBEDDABLE_TAG: ${{ env.LINUX_EMBEDDABLE_TAG }}
+          PLUGINS_RELEASE_TAG: ${{ env.PLUGINS_RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/hiroi-sora/Umi-OCR_runtime_linux.git /tmp/Umi-OCR_runtime_linux
+          cp -r -n /tmp/Umi-OCR_runtime_linux/{.,}* .
+          chmod +x umi-ocr.sh
+
+          curl -fL -o Umi-OCR_Linux_embeddable.tar.xz \
+            "https://github.com/hiroi-sora/Umi-OCR_runtime_linux/releases/download/${LINUX_EMBEDDABLE_TAG}/Umi-OCR_v${LINUX_EMBEDDABLE_TAG}_Linux_embeddable.tar.xz"
+          tar -xf Umi-OCR_Linux_embeddable.tar.xz --no-same-owner || tar -xf Umi-OCR_Linux_embeddable.tar.xz
+          cp -r -n .embeddable UmiOCR-data/
+
+          curl -fL -o linux_paddle.txz \
+            "https://github.com/hiroi-sora/Umi-OCR_plugins/releases/download/${PLUGINS_RELEASE_TAG}/linux_x64_PaddleOCR-json_v141.tar.xz"
+          mkdir -p UmiOCR-data/plugins
+          tar -xf linux_paddle.txz -C UmiOCR-data/plugins
+
+          VERSION=$(jq -r '"\(.version.major).\(.version.minor).\(.version.patch)"' UmiOCR-data/about.json)
+
+          STAGE="_stage/Umi-OCR_Linux_Paddle_${VERSION}"
+          rm -rf _stage
+          mkdir -p "$STAGE"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='_stage' \
+            --exclude='_tmp' \
+            --exclude='Umi-OCR_Linux_embeddable.tar.xz' \
+            --exclude='linux_paddle.txz' \
+            ./ "$STAGE/"
+          mkdir -p release
+          tar -C "_stage" -cJf "release/Umi-OCR_Linux_Paddle_${VERSION}.tar.xz" "Umi-OCR_Linux_Paddle_${VERSION}"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: release/*.tar.xz
+          if-no-files-found: error
+
+  publish:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      && (github.event_name == 'push'
+      || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true))
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/windows-packages/**/*
+            dist/linux-packages/**/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
