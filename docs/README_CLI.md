@@ -1,4 +1,4 @@
-[Translate to English](https://github-com.translate.goog/hiroi-sora/Umi-OCR/blob/main/docs/README_CLI.md?_x_tr_sl=zh-CN&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp)
+[Translate to English](https://github-com.translate.goog/hiroi-sora/Umi-OCR/blob/main/docs/README_CLI.md?_x_tr_sl=zh-CN&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp) · [English](README_CLI_en.md)
 
 - 命令行手册
 - [HTTP接口手册](http/README.md)
@@ -24,10 +24,6 @@
 **隐藏主窗口**：`umi-ocr --hide`
 
 **关闭软件**：`umi-ocr --quit`
-
-**重新加载配置文件**：`umi-ocr --reload` （`v2.1.5`以上版本支持）
-
-> Umi-OCR 的配置文件是 `./UmiOCR-data/.settings` ，ini格式；软件界面上设置的参数将会保存到此文件。允许手动修改配置文件，然后使用 `--reload` 指令来重新加载该配置文件并刷新软件设置界面。
 
 ### OCR指令
 
@@ -215,8 +211,6 @@ umi-ocr --call_qml [name] --func [function] --thread [..paras]
 ### 高级指令示例：
 
 示例目标：将一些PDF文档添加到软件，生成双层可搜索PDF。
-
-（提示：这个例子只是用来演示高级指令能做到什么事情。PDF文档识别可以直接调用 [HTTP接口](http/api_doc.md) 。）
 
 做法：
 

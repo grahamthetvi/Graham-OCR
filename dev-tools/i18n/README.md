@@ -1,3 +1,5 @@
+[English](README_en.md)
+
 ## 参与本地化翻译（译者）
 
 前往 Weblate 在线翻译平台，注册账户，或用Github账户登录：
