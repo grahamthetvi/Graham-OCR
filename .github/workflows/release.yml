@@ -49,6 +49,9 @@ jobs:
         env:
           WIN_RUNTIME_BUNDLE_TAG: ${{ env.WIN_RUNTIME_BUNDLE_TAG }}
           PLUGINS_RELEASE_TAG: ${{ env.PLUGINS_RELEASE_TAG }}
+          # Embedded Python on Windows uses cp1252 for stdout by default; upstream release.py logs in Chinese.
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/hiroi-sora/Umi-OCR_runtime_windows.git _runtime_win
@@ -100,7 +103,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y jq xz-utils rsync
+        run: sudo apt-get update && sudo apt-get install -y jq xz-utils rsync fakeroot rpm alien
 
       - name: Assemble Linux bundle and tarball
         env:
@@ -137,11 +140,45 @@ jobs:
           mkdir -p release
           tar -C "_stage" -cJf "release/Umi-OCR_Linux_Paddle_${VERSION}.tar.xz" "Umi-OCR_Linux_Paddle_${VERSION}"
 
+          # .deb (Debian/Ubuntu) and .rpm (Fedora/openSUSE/RHEL) from the same tree as the tarball
+          DEB_ROOT="_debpkg/umi-ocr_${VERSION}_amd64"
+          rm -rf _debpkg
+          mkdir -p "$DEB_ROOT/DEBIAN" "$DEB_ROOT/opt/Umi-OCR" "$DEB_ROOT/usr/bin"
+          rsync -a "$STAGE/" "$DEB_ROOT/opt/Umi-OCR/"
+          ln -sf /opt/Umi-OCR/umi-ocr.sh "$DEB_ROOT/usr/bin/umi-ocr"
+          cat > "$DEB_ROOT/DEBIAN/control" << EOF
+          Package: umi-ocr
+          Version: ${VERSION}
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Umi-OCR <https://github.com/hiroi-sora/Umi-OCR>
+          Depends: libc6 (>= 2.31), libgcc-s1 | libgcc1, libstdc++6, libx11-6, libxcb1, zlib1g
+          Description: Umi-OCR - free, open-source, batch OCR tool (offline, multi-language).
+           Bundled runtime; install under /opt/Umi-OCR. Run: umi-ocr
+          EOF
+          # Strip indentation from heredoc so dpkg field names start at column 0
+          sed -i 's/^          //' "$DEB_ROOT/DEBIAN/control"
+          chmod 755 "$DEB_ROOT/opt/Umi-OCR/umi-ocr.sh"
+          fakeroot dpkg-deb --build --root-owner-group "$DEB_ROOT" "release/umi-ocr_${VERSION}_amd64.deb"
+          ( cd release && fakeroot alien --to-rpm --scripts "umi-ocr_${VERSION}_amd64.deb" )
+          shopt -s nullglob
+          rpms=(release/*.rpm)
+          shopt -u nullglob
+          if [ ${#rpms[@]} -lt 1 ]; then
+            echo "::error::alien did not produce an .rpm in release/"
+            ls -la release
+            exit 1
+          fi
+
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-packages
-          path: release/*.tar.xz
+          path: |
+            release/*.tar.xz
+            release/*.deb
+            release/*.rpm
           if-no-files-found: error
 
   publish:
